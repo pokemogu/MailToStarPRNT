@@ -51,7 +51,8 @@ class MailToStarPRNT
 #if DEBUG
         Trace.WriteLine(DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " メール受信処理を開始します");
 #endif
-        PrintMails();
+        if(!this.mailclient.IsConnected)
+            PrintMails();
 #if DEBUG
         Trace.WriteLine(DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " メール受信処理を終了します");
 #endif
@@ -551,15 +552,6 @@ class MailToStarPRNT
 
             if (!login_only)
             {
-                /*
-                imapclient.Inbox.Open(MailKit.FolderAccess.ReadOnly);
-                var uids = imapclient.Inbox.Search(MailKit.Search.SearchQuery.All);
-                foreach(var uid in uids)
-                {
-                    //var message = imapclient.Inbox.GetMessage(uid);
-                    //Console.Write(message.Body);
-                }
-                */
                 if(this.mailclient is MailKit.Net.Pop3.Pop3Client)
                 {
                     MailKit.Net.Pop3.Pop3Client popclient = (MailKit.Net.Pop3.Pop3Client)this.mailclient;
@@ -616,17 +608,23 @@ class MailToStarPRNT
                     MailKit.Search.SearchQuery query = MailKit.Search.SearchQuery.All;
                     if (from_query != null)
                     {
+#if DEBUG
                         Trace.WriteLine(from_query.Term + " " + from_query.Text);
+#endif
                         query = query.And(from_query);
                     }
                     if (subject_query != null)
                     {
+#if DEBUG
                         Trace.WriteLine(subject_query.Term + " " + subject_query.Text);
+#endif
                         query = query.And(subject_query);
                     }
                     if (body_query != null)
                     {
+#if DEBUG
                         Trace.WriteLine(body_query.Term + " " + body_query.Text);
+#endif
                         query = query.And(body_query);
                     }
 
