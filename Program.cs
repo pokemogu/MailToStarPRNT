@@ -16,9 +16,12 @@ class MailToStarPRNT
 {
     public static readonly string AppName = "MailToStarPRNT";
     readonly System.Timers.Timer timer;
+    string appdatadir;
 
-    StarMicronics.StarIO.IPort starprnt_port; // StarPRNTプリンターインスタンス
+    //StarMicronics.StarIO.IPort starprnt_port; // StarPRNTプリンターインスタンス
     StarMicronics.StarIOExtension.Emulation emulation; // StarPRNTエミュレーションモード
+    string port_name;
+    int print_timeout;
 
     // メール受信関連メンバー
     MailKit.MailService mailclient; // メール受信インスタンス
@@ -38,21 +41,44 @@ class MailToStarPRNT
     {
         this.timer = new System.Timers.Timer() { AutoReset = true };
         this.timer.Elapsed += TimerElapsed;
+        this.appdatadir = "";
         this.print_on_error = true;
         this.print_on_start_stop = true;
+        this.port_name = "";
+        this.print_timeout = 10000;
         this.mail_server_ssl = true;
         this.mail_from_condition = "";
         this.mail_subject_condition = "";
         this.mail_body_condition = "";
     }
 
-    private void TimerElapsed(object sender, System.Timers.ElapsedEventArgs e)
+    private void TimerElapsed(object sender, System.Timers.ElapsedEventArgs ev)
     {
 #if DEBUG
         Trace.WriteLine(DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " メール受信処理を開始します");
 #endif
-        if(!this.mailclient.IsConnected)
-            PrintMails();
+
+        if (!this.mailclient.IsConnected)
+        {
+            // StarPRNTプリンターへの接続開始
+            StarMicronics.StarIO.IPort starprnt_port = null;
+            try
+            {
+                starprnt_port = StarMicronics.StarIO.Factory.I.GetPort(this.port_name, "", this.print_timeout);
+            }
+            catch (StarMicronics.StarIO.PortException e)
+            {
+                Trace.TraceError("StarPRNTプリンターに接続できませんでした。\n" + e.Message);
+                return;
+            }
+
+            PrintMails(starprnt_port);
+
+            // プリンター接続を終了
+            StarMicronics.StarIO.Factory.I.ReleasePort(starprnt_port);
+            starprnt_port = null;
+        }
+
 #if DEBUG
         Trace.WriteLine(DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " メール受信処理を終了します");
 #endif
@@ -67,6 +93,24 @@ class MailToStarPRNT
             Trace.Listeners.Add(new EventLogTraceListener(MailToStarPRNT.AppName));
 
         Trace.TraceInformation("アプリケーションを開始します。\nStarPRNT SDK version " + StarMicronics.StarIO.Factory.I.GetStarIOVersion());
+
+        // アプリケーションデータディレクトリ初期化
+        /*
+        string localappdir = System.Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        this.appdatadir = System.IO.Path.Combine(localappdir, MailToStarPRNT.AppName);
+        if (!System.IO.Directory.Exists(this.appdatadir))
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(this.appdatadir);
+            }
+            catch(Exception e)
+            {
+                Trace.TraceInformation("アプリケーションディレクトリ " + this.appdatadir + " の作成に失敗しました。アプリケーションをエラー終了します。\n" + e.ToString());
+                return false;
+            }
+        }
+        */
 
         // 設定ファイル読み込み
         var iniprop = LoadIniFile("MailToStarPRNT.ini");
@@ -173,10 +217,9 @@ class MailToStarPRNT
         }
 
         // StarPRNTプリンターの初期化
-        string port_name = "";
         string model_name = "";
         string firmware_version = "";
-        if (!iniprop.TryGetValue("StarPRNTPortName", out port_name))
+        if (!iniprop.TryGetValue("StarPRNTPortName", out this.port_name))
         {
             List<StarMicronics.StarIO.PortInfo> printers = StarMicronics.StarIO.Factory.I.SearchPrinter();
 
@@ -191,11 +234,11 @@ class MailToStarPRNT
 #endif
                 if (printer.ModelName != "")
                 {
-                    port_name = printer.PortName;
+                    this.port_name = printer.PortName;
                     return;
                 }
             });
-            if (port_name == "")
+            if (this.port_name == "")
             {
                 Trace.TraceError("StarPRNTプリンターが見つかりませんでした。アプリケーションをエラー終了します。");
                 hc.Stop();
@@ -204,21 +247,21 @@ class MailToStarPRNT
         }
 
         // StarPRNTプリンターへの接続開始
+        StarMicronics.StarIO.IPort starprnt_port;
         try
         {
-            int print_timeout = 10000;
             if(iniprop.TryGetValue("StarPRNTTimeOutSeconds",out string print_timeout_str)){
-                if (int.TryParse(print_timeout_str, out print_timeout))
-                    print_timeout *= 1000; // ミリ秒単位に修正
+                if (int.TryParse(print_timeout_str, out this.print_timeout))
+                    this.print_timeout *= 1000; // ミリ秒単位に修正
                 else
-                    print_timeout = 10000;
+                    this.print_timeout = 10000;
             }
 
-            this.starprnt_port = StarMicronics.StarIO.Factory.I.GetPort(port_name, "", print_timeout);
-            var devinfo = this.starprnt_port.GetFirmwareInformation();
+            starprnt_port = StarMicronics.StarIO.Factory.I.GetPort(this.port_name, "", this.print_timeout);
+            var devinfo = starprnt_port.GetFirmwareInformation();
             model_name = devinfo["ModelName"];
             firmware_version = devinfo["FirmwareVersion"];
-            Trace.TraceInformation("次のStarPRNTプリンターを使用します。\nモデル名: " + model_name + ", ファームウェア: " + firmware_version + ", 通信ポート: " + port_name);
+            Trace.TraceInformation("次のStarPRNTプリンターを使用します。\nモデル名: " + model_name + ", ファームウェア: " + firmware_version + ", 通信ポート: " + this.port_name);
         }
         catch(StarMicronics.StarIO.PortException e)
         {
@@ -268,7 +311,7 @@ class MailToStarPRNT
         // 起動時メッセージを印刷
         if (this.print_on_start_stop)
         {
-            if (!SendStringToStarPRNT("★" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " 自動印刷を開始します★\n\n\n\n\n\n\n\n\n\n"))
+            if (!SendStringToStarPRNT(starprnt_port,"★" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " 自動印刷を開始します★\n\n\n\n\n\n\n\n\n\n"))
             {
                 Trace.TraceError("StarPRNTプリンターへの初期化メッセージの送信時にエラーが発生しました。アプリケーションをエラー終了します。");
                 hc.Stop();
@@ -276,8 +319,12 @@ class MailToStarPRNT
             }
         }
 
+        // プリンター接続を終了
+        StarMicronics.StarIO.Factory.I.ReleasePort(starprnt_port);
+        starprnt_port = null;
+
         // メールログイン試行
-        PrintMails(true);
+        PrintMails(null);
 
         // メールチェックタイマー設定・開始
         int mail_check_interval = 30000;
@@ -297,11 +344,26 @@ class MailToStarPRNT
     {
         if (this.print_on_start_stop)
         {
-            if (!SendStringToStarPRNT("★" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " 自動印刷を停止します★\n\n\n\n\n\n\n\n\n\n"))
+            // StarPRNTプリンターへの接続開始
+            StarMicronics.StarIO.IPort starprnt_port = null;
+            try
+            {
+                starprnt_port = StarMicronics.StarIO.Factory.I.GetPort(this.port_name, "", this.print_timeout);
+            }
+            catch (StarMicronics.StarIO.PortException ex)
+            {
+                Trace.TraceError("StarPRNTプリンターに接続できませんでした。\n" + ex.Message);
+                return;
+            }
+
+            if (!SendStringToStarPRNT(starprnt_port,"★" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " 自動印刷を停止します★\n\n\n\n\n\n\n\n\n\n"))
                 Trace.TraceError("StarPRNTプリンターへの停止時メッセージの送信時にエラーが発生しました。");
+
+            // プリンター接続を終了
+            StarMicronics.StarIO.Factory.I.ReleasePort(starprnt_port);
+            starprnt_port = null;
         }
         timer.Stop();
-        StarMicronics.StarIO.Factory.I.ReleasePort(starprnt_port);
         Trace.TraceInformation("アプリケーションを終了します。");
     }
     private byte[] BuildCommandsFromString(string str)
@@ -318,15 +380,15 @@ class MailToStarPRNT
 
         return builder.Commands;
     }
-    private bool SendStringToStarPRNT(string str)
+    private bool SendStringToStarPRNT(StarMicronics.StarIO.IPort starprnt_port,string str)
     {
         try
         {
-            if (this.BeginCheckStarPRNTPrinter())
+            if (this.BeginCheckStarPRNTPrinter(starprnt_port))
             {
                 var commands = this.BuildCommandsFromString(str);
-                uint sent_bytes = this.starprnt_port.WritePort(commands, 0, (uint)commands.Length);
-                if(!this.EndCheckStarPRNTPrinter())
+                uint sent_bytes = starprnt_port.WritePort(commands, 0, (uint)commands.Length);
+                if(!this.EndCheckStarPRNTPrinter(starprnt_port))
                     return false;
                 if (sent_bytes != (uint)commands.Length)
                 {
@@ -403,11 +465,11 @@ class MailToStarPRNT
         return true;
     }
 
-    private bool BeginCheckStarPRNTPrinter()
+    private bool BeginCheckStarPRNTPrinter(StarMicronics.StarIO.IPort starprnt_port)
     {
         try
         {
-            var status = this.starprnt_port.BeginCheckedBlock();
+            var status = starprnt_port.BeginCheckedBlock();
             return CheckStarPRNTPrinterStatus(status);
         }
         catch (StarMicronics.StarIO.PortException e)
@@ -432,11 +494,11 @@ class MailToStarPRNT
             return false;
         }
     }
-    private bool EndCheckStarPRNTPrinter()
+    private bool EndCheckStarPRNTPrinter(StarMicronics.StarIO.IPort starprnt_port)
     {
         try
         {
-            var status = this.starprnt_port.EndCheckedBlock();
+            var status = starprnt_port.EndCheckedBlock();
             return CheckStarPRNTPrinterStatus(status);
         }
         catch (StarMicronics.StarIO.PortException e)
@@ -543,14 +605,14 @@ class MailToStarPRNT
 
         return iniprop;
     }
-    private bool PrintMails(bool login_only = false)
+    private bool PrintMails(StarMicronics.StarIO.IPort starprnt_port = null)
     {
         try
         {
             this.mailclient.Connect(this.mail_server_name, this.mail_server_port_number, this.mail_server_ssl);
             this.mailclient.Authenticate(this.mail_server_username, this.mail_server_password);
 
-            if (!login_only)
+            if (starprnt_port != null)
             {
                 if(this.mailclient is MailKit.Net.Pop3.Pop3Client)
                 {
@@ -586,7 +648,7 @@ class MailToStarPRNT
                             if (!message.TextBody.Contains(this.mail_body_condition))
                                 continue;
 
-                        if (SendStringToStarPRNT(message.TextBody))
+                        if (SendStringToStarPRNT(starprnt_port,message.TextBody))
                             popclient.DeleteMessage(i);
                     }
                 }
@@ -634,7 +696,7 @@ class MailToStarPRNT
                     foreach (MailKit.UniqueId uid in uids)
                     {
                         var message = imapclient.Inbox.GetMessage(uid);
-                        if (SendStringToStarPRNT(message.TextBody))
+                        if (SendStringToStarPRNT(starprnt_port,message.TextBody))
                         {
                             imapclient.Inbox.AddFlags(uid, MailKit.MessageFlags.Deleted, true);
                             deleted_uids.Add(uid);
@@ -650,7 +712,7 @@ class MailToStarPRNT
             Trace.TraceError("メールサーバーとの通信に失敗しました。\n" + e.ToString());
             if (this.print_on_error)
             {
-                SendStringToStarPRNT("【エラー】" +
+                SendStringToStarPRNT(starprnt_port,"【エラー】" +
                     DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " " +
                     "メールサーバーとの通信に失敗しました。自動印刷ができない状態です。ネットワークかメールサーバーに異常が発生している可能性があります。このエラーが出続ける場合は管理者にお問い合わせ下さい。\n" +
                     e.GetType().ToString() + ": " + e.Message + "\n\n\n\n\n\n\n\n\n\n");
@@ -661,7 +723,7 @@ class MailToStarPRNT
             Trace.TraceError("メールサーバーへのログインに失敗しました。ユーザー名かパスワードが間違っているか、サーバー側でアカウントロックされた可能性があります。\n" + e.ToString());
             if (this.print_on_error)
             {
-                SendStringToStarPRNT("【エラー】" +
+                SendStringToStarPRNT(starprnt_port,"【エラー】" +
                 DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " " +
                 "メールサーバーへのログインに失敗しました。自動印刷ができない状態です。管理者にお問い合わせ下さい。" +
                 e.Message + "\n\n\n\n\n\n\n\n\n\n");
@@ -672,7 +734,7 @@ class MailToStarPRNT
             Trace.TraceError("メール処理でエラーが発生しました。\n" + e.ToString());
             if (this.print_on_error)
             {
-                SendStringToStarPRNT("【エラー】" +
+                SendStringToStarPRNT(starprnt_port,"【エラー】" +
                 DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + " " +
                 "自動印刷ができない状態です。管理者にお問い合わせ下さい。\n" +
                 e.GetType().ToString() + ": " + e.Message + "\n\n\n\n\n\n\n\n\n\n");

@@ -118,7 +118,11 @@ Section "Uninstall"
   # アンインストーラを削除
   Delete "$INSTDIR\Uninstall.exe"
   # ファイルを削除
-  Delete "$INSTDIR\*"
+  Delete "$INSTDIR\*.exe*"
+  Delete "$INSTDIR\*.exe.config"
+  Delete "$INSTDIR\*.bat"
+  Delete "$INSTDIR\*.dll"
+  Delete "$INSTDIR\*.xml"
   # ディレクトリを削除
   RMDir "$INSTDIR"
 
